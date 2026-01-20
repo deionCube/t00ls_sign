@@ -7,198 +7,307 @@ import hashlib
 import os
 import sys
 import time
+from typing import Optional, Dict, Any
 
-# 设置请求头，模拟浏览器
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-    'Origin': 'https://www.t00ls.com',
-    'Referer': 'https://www.t00ls.com/members-login.html',
-    'X-Requested-With': 'XMLHttpRequest',
-}
-
-def debug_response(response):
-    """调试响应信息"""
-    print(f"状态码: {response.status_code}")
-    print(f"响应头: {dict(response.headers)}")
-    print(f"响应内容前500字符: {response.text[:500] if response.text else '空响应'}")
-    return response
-
-def main():
-    # 从环境变量获取凭证，提供默认值
-    uname = os.environ.get('T00LS_USERNAME', '')
-    pswd = os.environ.get('T00LS_PASSWORD', '')
-    
-    # 检查必要的环境变量
-    if not uname or not pswd:
-        print("错误: 缺少必要的环境变量 T00LS_USERNAME 或 T00LS_PASSWORD")
-        sys.exit(1)
-    
-    # 密码是否为MD5格式
-    password_hash = os.environ.get('T00LS_MD5', 'False').lower() == 'true'
-    
-    # 安全提问
-    qesnum = os.environ.get('T00LS_QID', '0')
-    qan = os.environ.get('T00LS_QANS', '')
-    
-    # Server酱的SCKEY
-    SCKEY = os.environ.get('T00LS_SCKEY', '')
-    
-    # 如果不是MD5格式，则转换为MD5
-    if not password_hash:
-        pswd = hashlib.md5(pswd.encode('utf-8')).hexdigest()
-    
-    # 创建会话
-    session = requests.Session()
-    session.headers.update(headers)
-    
-    # 登录数据
-    logindata = {
-        'action': 'login',
-        'username': uname,
-        'password': pswd,
-        'questionid': qesnum,
-        'answer': qan,
-        'cookietime': '2592000'  # 30天保持登录
-    }
-    
-    print(f"尝试登录用户: {uname}")
-    print(f"使用安全提问ID: {qesnum}")
-    
-    try:
-        # 登录请求
-        rlogin = session.post('https://www.t00ls.com/login.json', data=logindata, timeout=30)
+class T00lsSign:
+    def __init__(self):
+        self.session = requests.Session()
+        self._setup_headers()
         
-        # 调试信息
-        debug_response(rlogin)
+    def _setup_headers(self):
+        """设置请求头"""
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'Origin': 'https://www.t00ls.com',
+            'Referer': 'https://www.t00ls.com/members-login.html',
+            'X-Requested-With': 'XMLHttpRequest',
+        }
+        self.session.headers.update(headers)
+    
+    def _safe_debug_response(self, response: requests.Response, max_chars: int = 300) -> Dict[str, Any]:
+        """
+        安全的响应调试信息，避免泄露敏感信息
+        """
+        debug_info = {
+            'status_code': response.status_code,
+            'headers': dict(response.headers),
+            'text_preview': response.text[:max_chars] if response.text else '空响应',
+            'text_length': len(response.text) if response.text else 0,
+            'url': response.url,
+        }
         
-        # 检查响应状态
-        if rlogin.status_code != 200:
-            print(f"登录请求失败，状态码: {rlogin.status_code}")
+        # 安全地显示部分信息（不显示完整的 cookies）
+        print(f"状态码: {debug_info['status_code']}")
+        print(f"响应大小: {debug_info['text_length']} 字符")
+        
+        # 检查响应内容是否包含敏感信息
+        text_preview = debug_info['text_preview']
+        if debug_info['text_length'] > 0:
+            # 检查是否是 JSON
+            if text_preview.strip().startswith('{') or text_preview.strip().startswith('['):
+                print("响应格式: JSON")
+                try:
+                    parsed = json.loads(response.text)
+                    # 只显示非敏感字段
+                    safe_keys = ['status', 'message', 'formhash', 'success']
+                    for key in safe_keys:
+                        if key in parsed:
+                            print(f"  {key}: {parsed[key]}")
+                except:
+                    print("  JSON解析失败（显示预览）")
+                    print(f"  预览: {text_preview}")
+            else:
+                print(f"响应预览: {text_preview}")
+        
+        return debug_info
+    
+    def _get_env_var(self, var_name: str, default: str = '', required: bool = False) -> str:
+        """安全地获取环境变量"""
+        value = os.environ.get(var_name, default)
+        
+        if required and not value:
+            print(f"错误: 缺少必要的环境变量 {var_name}")
             sys.exit(1)
+            
+        # 部分环境变量不显示完整值
+        if var_name in ['T00LS_PASSWORD', 'T00LS_QANS'] and value:
+            print(f"{var_name}: {'已设置（内容已隐藏）'}")
+        else:
+            print(f"{var_name}: {value if value else '未设置'}")
+            
+        return value
+    
+    def login(self) -> Optional[Dict[str, Any]]:
+        """登录 T00ls"""
+        print("\n=== 登录 T00ls ===")
         
-        # 检查响应内容是否为JSON
-        if not rlogin.text.strip():
-            print("错误: 响应内容为空")
-            sys.exit(1)
+        # 获取登录凭证
+        uname = self._get_env_var('T00LS_USERNAME', required=True)
+        pswd = self._get_env_var('T00LS_PASSWORD', required=True)
         
-        # 尝试解析JSON
+        # 密码是否为MD5格式
+        password_hash = os.environ.get('T00LS_MD5', 'False').lower() == 'true'
+        
+        # 安全提问
+        qesnum = self._get_env_var('T00LS_QID', '0')
+        qan = self._get_env_var('T00LS_QANS', '')
+        
+        # 如果不是MD5格式，则转换为MD5
+        if not password_hash:
+            pswd = hashlib.md5(pswd.encode('utf-8')).hexdigest()
+        
+        # 登录数据
+        logindata = {
+            'action': 'login',
+            'username': uname,
+            'password': pswd,
+            'questionid': qesnum,
+            'answer': qan,
+            'cookietime': '2592000'
+        }
+        
+        print(f"登录用户: {uname}")
+        print(f"安全提问ID: {qesnum}")
+        
         try:
-            rlogj = json.loads(rlogin.text)
-        except json.JSONDecodeError as e:
-            print(f"JSON解析错误: {e}")
-            print(f"实际返回的内容: {rlogin.text}")
+            # 登录请求
+            response = self.session.post(
+                'https://www.t00ls.com/login.json',
+                data=logindata,
+                timeout=30
+            )
             
-            # 尝试从响应中提取错误信息
-            if "验证码" in rlogin.text or "验证" in rlogin.text:
-                print("错误: 可能需要验证码，请手动登录检查")
-            elif "密码错误" in rlogin.text:
-                print("错误: 用户名或密码错误")
-            elif "安全提问" in rlogin.text:
-                print("错误: 安全提问设置不正确")
+            debug_info = self._safe_debug_response(response)
             
-            sys.exit(1)
-        
-        # 检查登录结果
-        if rlogj.get("status") != "success":
-            message = rlogj.get("message", "未知错误")
-            print(f"登录失败: {message}")
+            # 检查响应状态
+            if response.status_code != 200:
+                print(f"登录请求失败，状态码: {response.status_code}")
+                return None
             
-            # 处理特定错误
-            if "密码错误" in message:
-                print("提示: 请检查密码是否正确，或者尝试使用MD5格式密码")
-            elif "安全提问" in message:
-                print("提示: 请检查安全提问ID和答案是否正确")
-            elif "频繁" in message:
-                print("提示: 登录过于频繁，请稍后再试")
+            # 解析响应
+            try:
+                result = json.loads(response.text)
+            except json.JSONDecodeError as e:
+                print(f"JSON解析错误: {e}")
+                
+                # 分析常见的非JSON响应
+                text = response.text.lower()
+                if '验证码' in text or 'captcha' in text:
+                    print("错误: 需要验证码，请手动登录检查")
+                elif '密码错误' in text or 'password' in text:
+                    print("错误: 用户名或密码错误")
+                elif '安全提问' in text:
+                    print("错误: 安全提问设置不正确")
+                elif '频繁' in text:
+                    print("错误: 登录过于频繁，请稍后再试")
+                
+                return None
             
-            sys.exit(1)
+            # 检查登录结果
+            if result.get('status') != 'success':
+                message = result.get('message', '未知错误')
+                print(f"登录失败: {message}")
+                return None
+            
+            print("登录成功！")
+            if 'formhash' in result:
+                print(f"获取到formhash: {result['formhash'][:8]}...")  # 只显示部分
+            
+            # 安全地检查cookies（不显示完整值）
+            cookie_names = [c.name for c in self.session.cookies]
+            print(f"获取到Cookies数量: {len(cookie_names)}")
+            if cookie_names:
+                print(f"Cookie名称: {', '.join(cookie_names[:3])}...")
+            
+            return result
+            
+        except requests.exceptions.Timeout:
+            print("登录请求超时")
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"网络请求异常: {e}")
+            return None
+    
+    def sign(self, formhash: str) -> Optional[Dict[str, Any]]:
+        """签到"""
+        print("\n=== 执行签到 ===")
         
-        print("登录成功！")
-        print(f"Formhash: {rlogj.get('formhash')}")
-        
-        # 获取cookies
-        tscookie = requests.utils.dict_from_cookiejar(rlogin.cookies)
-        print(f"获取到的Cookies: {tscookie}")
-        
-        # 等待一下，避免请求过快
-        time.sleep(2)
+        if not formhash:
+            print("错误: 缺少formhash参数")
+            return None
         
         # 准备签到数据
-        formhash = rlogj.get("formhash", "")
-        if not formhash:
-            print("错误: 未获取到formhash")
-            sys.exit(1)
-        
         signdata = {
             'formhash': formhash,
             'signsubmit': "true"
         }
         
-        print("尝试签到...")
+        try:
+            # 短暂等待，避免请求过快
+            time.sleep(1)
+            
+            # 签到请求
+            response = self.session.post(
+                'https://www.t00ls.com/ajax-sign.json',
+                data=signdata,
+                timeout=30
+            )
+            
+            debug_info = self._safe_debug_response(response)
+            
+            # 检查响应状态
+            if response.status_code != 200:
+                print(f"签到请求失败，状态码: {response.status_code}")
+                return None
+            
+            # 解析响应
+            try:
+                result = json.loads(response.text)
+                return result
+            except json.JSONDecodeError:
+                print("签到响应不是有效的JSON格式")
+                return None
+            
+        except requests.exceptions.Timeout:
+            print("签到请求超时")
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"网络请求异常: {e}")
+            return None
+    
+    def send_notification(self, title: str, content: str) -> bool:
+        """发送Server酱通知"""
+        sckey = self._get_env_var('T00LS_SCKEY')
         
-        # 签到请求
-        rsign = session.post('https://www.t00ls.com/ajax-sign.json', data=signdata, timeout=30)
+        if not sckey:
+            return False
         
-        # 调试信息
-        debug_response(rsign)
+        print("\n=== 发送通知 ===")
         
-        if rsign.status_code != 200:
-            print(f"签到请求失败，状态码: {rsign.status_code}")
+        try:
+            datamsg = {
+                "text": title,
+                "desp": content
+            }
+            
+            response = requests.post(
+                f"https://sctapi.ftqq.com/{sckey}.send",
+                data=datamsg,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                print("通知发送成功")
+                return True
+            else:
+                print(f"通知发送失败，状态码: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"通知发送异常: {e}")
+            return False
+    
+    def run(self):
+        """主运行函数"""
+        print("=== T00ls 自动签到脚本 ===")
+        print(f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # 登录
+        login_result = self.login()
+        if not login_result:
+            print("登录失败，终止执行")
             sys.exit(1)
         
-        # 解析签到结果
-        try:
-            rsinj = json.loads(rsign.text)
-        except json.JSONDecodeError as e:
-            print(f"签到响应JSON解析错误: {e}")
-            print(f"实际返回的内容: {rsign.text}")
+        # 签到
+        formhash = login_result.get('formhash', '')
+        sign_result = self.sign(formhash)
+        
+        if not sign_result:
+            print("签到失败，无法获取结果")
             sys.exit(1)
         
         # 处理签到结果
-        if rsinj.get("status") == "success":
-            message = rsinj.get("message", "签到成功")
+        status = sign_result.get('status', '')
+        message = sign_result.get('message', '')
+        
+        if status == 'success':
             print(f"签到成功！消息: {message}")
             
-            # Server酱通知
-            if SCKEY:
-                datamsg = {
-                    "text": "T00ls签到成功！",
-                    "desp": f"用户: {uname}\n消息: {message}\n原始响应: {rsign.text}"
-                }
-                try:
-                    notify_resp = requests.post(f"https://sctapi.ftqq.com/{SCKEY}.send", 
-                                               data=datamsg, timeout=10)
-                    print(f"Server酱通知发送状态: {notify_resp.status_code}")
-                except Exception as e:
-                    print(f"Server酱通知发送失败: {e}")
-        
-        elif rsinj.get("message") == "alreadysign":
+            # 发送成功通知
+            content = f"用户登录成功\n签到结果: {message}\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            self.send_notification("T00ls签到成功", content)
+            
+        elif message == 'alreadysign':
             print("今天已经签到过了！")
+            
+            # 发送重复签到通知
+            content = f"用户今天已经签到过了\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            self.send_notification("T00ls重复签到", content)
+            
         else:
-            message = rsinj.get("message", "未知错误")
             print(f"签到失败: {message}")
             
-            # Server酱通知失败
-            if SCKEY:
-                datamsg = {
-                    "text": "T00ls签到失败",
-                    "desp": f"用户: {uname}\n错误: {message}\n原始响应: {rsign.text}"
-                }
-                try:
-                    requests.post(f"https://sctapi.ftqq.com/{SCKEY}.send", data=datamsg, timeout=10)
-                except:
-                    pass
+            # 发送失败通知
+            content = f"签到失败\n错误信息: {message}\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            self.send_notification("T00ls签到失败", content)
             
             sys.exit(1)
-            
-    except requests.exceptions.RequestException as e:
-        print(f"网络请求异常: {e}")
-        sys.exit(1)
+        
+        print("\n=== 执行完成 ===")
+
+def main():
+    """主函数"""
+    try:
+        signer = T00lsSign()
+        signer.run()
+    except KeyboardInterrupt:
+        print("\n用户中断执行")
+        sys.exit(0)
     except Exception as e:
-        print(f"未知错误: {e}")
+        print(f"程序异常: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
